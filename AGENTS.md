@@ -37,7 +37,7 @@ The project uses a Python venv at `.venv/`. After cloning:
 ```bash
 python3 -m venv .venv
 .venv/bin/python -m pip install -e ".[dev]"
-.venv/bin/python -m pytest -v          # 19 tests, all green
+.venv/bin/python -m pytest -v          # 20 tests, all green
 ```
 
 All commands below assume the venv interpreter, e.g.
@@ -69,8 +69,12 @@ when the current month has spent its token budget. Set a budget with:
 The MCP server refuses to start when a cloud LLM provider is
 configured (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY`,
 `MOONSHOT_API_KEY`, or any non-`ollama` provider in
-`opencode.json`). Pass `--allow-cloud-check-skip` to bypass for
-development.
+`opencode.json`). To bypass for development, pass the CLI flag before
+the subcommand — it is forwarded to the server subprocess:
+
+```bash
+.venv/bin/python ledger_cli.py --allow-cloud-check-skip budget
+```
 
 A full demo with `HTTP_PROXY=http://127.0.0.1:9` (a dead port)
 completes the import → categorise → report flow without any outbound
@@ -107,7 +111,7 @@ The boundary is enforced by **permissions**, not by prompts:
 6. **The custom import tool returns counts only**, never the raw
    merchant strings, so a malicious payload cannot ride a tool result.
 
-Regression: `tests/test_sanitize.py` (19 tests) proves the wrapper
+Regression: `tests/test_sanitize.py` (20 tests) proves the wrapper
 neutralises every pattern in `INJECTION_PATTERNS` and that
 `data/poisoned.csv`'s seeded injection does **not** flip the
 category to `income`.

@@ -20,6 +20,10 @@ from fastmcp.client.transports import StdioTransport
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 
+# Dev escape hatch (PLAN §5.18): forwarded to the MCP server subprocess so its
+# local-only guard is skipped. Set via the top-level --allow-cloud-check-skip flag.
+_ALLOW_CLOUD_CHECK_SKIP = False
+
 
 def _server_command() -> tuple[str, list[str]]:
     """Resolve the command that runs the MCP server.
@@ -27,10 +31,13 @@ def _server_command() -> tuple[str, list[str]]:
     Prefers .venv/bin/python (clean stdlib) so the subprocess inherits the
     same installed packages; falls back to `python3` on PATH.
     """
+    args = ["-m", "ledger.mcp_server"]
+    if _ALLOW_CLOUD_CHECK_SKIP:
+        args.append("--allow-cloud-check-skip")
     venv_python = PROJECT_ROOT / ".venv" / "bin" / "python"
     if venv_python.exists():
-        return str(venv_python), ["-m", "ledger.mcp_server"]
-    return sys.executable, ["-m", "ledger.mcp_server"]
+        return str(venv_python), args
+    return sys.executable, args
 
 
 def _client() -> Client:
@@ -128,6 +135,11 @@ async def cmd_status(_: argparse.Namespace) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="ledger", description="Local-only finance sorter (MCP-powered)")
+    parser.add_argument(
+        "--allow-cloud-check-skip",
+        action="store_true",
+        help="Development escape hatch: skip the MCP server's local-only startup check",
+    )
     sub = parser.add_subparsers(dest="cmd", required=True)
 
     p_import = sub.add_parser("import", help="Import a bank CSV via the ledger MCP")
@@ -160,8 +172,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    global _ALLOW_CLOUD_CHECK_SKIP
     parser = build_parser()
     args = parser.parse_args(argv)
+    _ALLOW_CLOUD_CHECK_SKIP = bool(getattr(args, "allow_cloud_check_skip", False))
     return asyncio.run(args.func(args))
 
 

@@ -1,14 +1,20 @@
-"""Build a small, hand-labelled eval set from sample.csv and run the local
+"""Build a small, hand-labelled eval set from sample.csv and score the local
 categoriser against it. Writes docs/llm-comparison.md with the numbers.
 
+Honesty rule (PLAN §5.17: "the local numbers must still be real"): the doc
+must say *which* classifier produced the numbers. When Ollama is unreachable
+the pipeline falls back to the deterministic keyword classifier, and the hand
+labels share substring keys with those rules — so the resulting accuracy is
+trivially ~100% and says nothing about model quality. The generated table
+labels the row accordingly instead of attributing fallback results to
+llama3.2:3b.
+
 Cloud column is left blank because no cloud LLM provider is reachable
-in this environment — but the local numbers and the comparison
-structure are real (per PLAN §5.17).
+in this environment — the attempted setup is documented in the doc.
 """
 from __future__ import annotations
 
 import csv
-import json
 import random
 import sqlite3
 import sys
@@ -17,7 +23,6 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-ROOT = Path(__file__).resolve().parent.parent
 SAMPLE = ROOT / "data" / "sample.csv"
 DB = ROOT / "data" / "ledger.sqlite"
 OUT = ROOT / "docs" / "llm-comparison.md"  # noqa: F841
@@ -89,6 +94,29 @@ def predicted_category(merchant: str) -> str:
         return row["category"] if row else "other"
 
 
+def _classifier_provenance() -> tuple[tuple[int, int], bool, dict]:
+    """Return ((prompt_tok, eval_tok), ollama_live, source_counts) — which
+    classifier produced the DB's categories, per token usage and
+    category_source rows."""
+    with sqlite3.connect(DB) as conn:
+        conn.row_factory = sqlite3.Row
+        tok = conn.execute(
+            "SELECT COALESCE(SUM(prompt_tokens),0) AS p, COALESCE(SUM(eval_tokens),0) AS e "
+            "FROM token_usage"
+        ).fetchone()
+        sources = {
+            r["category_source"]: r["n"]
+            for r in conn.execute(
+                "SELECT category_source, COUNT(*) AS n FROM transactions "
+                "WHERE category IS NOT NULL GROUP BY category_source"
+            ).fetchall()
+        }
+    prompt_tok, eval_tok = int(tok["p"]), int(tok["e"])
+    model_rows = sources.get("model", 0)
+    ollama_live = (prompt_tok + eval_tok) > 0 or model_rows > 0
+    return (prompt_tok, eval_tok), ollama_live, sources
+
+
 def main() -> None:
     eval_rows = select_labeled_rows()
     correct = 0
@@ -101,31 +129,45 @@ def main() -> None:
             confusion[(expected, predicted)] = confusion.get((expected, predicted), 0) + 1
     accuracy = correct / len(eval_rows) if eval_rows else 0.0
 
-    # Local token usage (we record zero because Ollama is offline in
-    # the build env; the call shape records prompt_eval_count /
-    # eval_count when Ollama is live).
-    with sqlite3.connect(DB) as conn:
-        row = conn.execute(
-            "SELECT COALESCE(SUM(prompt_tokens),0), COALESCE(SUM(eval_tokens),0) FROM token_usage"
-        ).fetchone()
-    prompt_tok, eval_tok = int(row[0]), int(row[1])
+    (prompt_tok, eval_tok), ollama_live, sources = _classifier_provenance()
+
+    if ollama_live:
+        local_label = "`llama3.2:3b` (local Ollama)"
+        latency_cell = "_see run log_"
+        accuracy_note = ""
+    else:
+        local_label = "rule-fallback classifier (Ollama offline — model **not evaluated**)"
+        latency_cell = "n/a — no model calls made"
+        accuracy_note = (
+            "\n> ⚠️ The accuracy above is **not evidence of model quality**: the hand\n"
+            "> labels share substring keys with `_fallback_classify`'s rules, so a\n"
+            "> ~100% score is expected by construction. It only verifies that the\n"
+            "> eval pipeline and the deterministic fallback agree with the labels.\n"
+        )
 
     md = f"""# LLM comparison — local vs cloud categoriser
 
 Sample: {len(eval_rows)} hand-labelled transactions drawn from
-`data/sample.csv` (seed={SEED}, selected by substring match against
-the rule keys in `ledger/categorize.py::_fallback_classify`).
+`data/sample.csv` (seed={SEED}, labelled by substring match against
+the keys in `HAND_LABELS` in `data/run_comparison.py`).
 
-The cloud column is left blank in this build because no cloud LLM
-provider is reachable from the sandbox environment; the comparison
-*structure* and the local numbers are real, per the PLAN.
-
-| Model              | Input tokens | Output tokens | Latency (s) | Accuracy | Cost (USD) |
+| Model / classifier | Input tokens | Output tokens | Latency (s) | Accuracy | Cost (USD) |
 |--------------------|-------------:|--------------:|------------:|---------:|-----------:|
-| `llama3.2:3b` (local Ollama) | {prompt_tok} | {eval_tok} | (offline in sandbox) | {accuracy:.0%} ({correct}/{len(eval_rows)}) | 0.00 |
+| {local_label} | {prompt_tok} | {eval_tok} | {latency_cell} | {accuracy:.0%} ({correct}/{len(eval_rows)}) | 0.00 |
 | Cloud model        | _not run — no provider reachable_ | — | — | — | — |
+{accuracy_note}
+Category sources in the database at generation time: `{sources}`.
 
-## Confusion (local model, this sample)
+## Cloud column — attempted setup
+
+Per PLAN §5.17's escape hatch: no cloud provider is reachable from the
+build environment (no provider configured in `opencode.json`, outbound
+network unavailable), so the cloud run could not be executed. The table
+structure is in place; re-running `data/run_comparison.py` in a session
+with an authenticated cloud model fills the column from that session's
+token report.
+
+## Confusion (this sample)
 
 """
     if confusion:
@@ -133,16 +175,27 @@ provider is reachable from the sandbox environment; the comparison
             md += f"- expected `{exp}` → got `{got}` ×{n}\n"
     else:
         md += "_(none)_\n"
-    md += f"""
 
+    if ollama_live:
+        conclusion = f"""Local `llama3.2:3b` (via Ollama) categorises {correct}/{len(eval_rows)}
+of the hand-labelled sample correctly ({accuracy:.0%}), using
+{prompt_tok + eval_tok} tokens recorded in `token_usage`. Cost is the
+marginal electricity of running the model on the user's own machine —
+zero marginal API spend."""
+    else:
+        conclusion = f"""`llama3.2:3b` was **not evaluated** — Ollama was unreachable in the
+build environment, so the numbers above come from the deterministic
+rule-based fallback classifier ({correct}/{len(eval_rows)} = {accuracy:.0%},
+expected by construction; see the warning above). To produce the real
+local-model row: start Ollama with `llama3.2:3b` pulled, wipe the
+categories (`UPDATE transactions SET category=NULL, category_source=NULL;
+DELETE FROM token_usage;`), re-run `categorise`, then re-run this script.
+The harness, label set, and table structure are ready for that run."""
+
+    md += f"""
 ## Conclusion
 
-Local `llama3.2:3b` (via Ollama) categorises {correct}/{len(eval_rows)}
-of the hand-labelled sample correctly ({accuracy:.0%}). Cost is the
-marginal electricity of running the model on the user's own laptop —
-zero marginal API spend. The cloud comparison would normally trade
-that zero cost for higher accuracy on edge cases; with no provider
-reachable here, the cloud numbers are deferred.
+{conclusion}
 
 The categorisation cache (kNN over transaction embeddings) makes the
 repeat-call cost effectively zero once a merchant has been labelled
@@ -151,7 +204,7 @@ identical merchants, which is the S12 win.
 """
     OUT.parent.mkdir(parents=True, exist_ok=True)
     OUT.write_text(md, encoding="utf-8")
-    print(f"wrote {OUT.relative_to(ROOT)} — accuracy {accuracy:.0%} ({correct}/{len(eval_rows)})")
+    print(f"wrote {OUT.relative_to(ROOT)} — accuracy {accuracy:.0%} ({correct}/{len(eval_rows)}), ollama_live={ollama_live}")
 
 
 if __name__ == "__main__":

@@ -1,7 +1,7 @@
 # Framework decision — no framework
 
-**Choice:** plain Python modules, stdlib + `fastmcp` + `pydantic` +
-`matplotlib`. No agent framework, no orchestrator.
+**Choice:** plain Python modules, stdlib + `fastmcp` + `matplotlib`.
+No agent framework, no orchestrator.
 
 **Why this passes the S9 decision tree.** The S9 decision tree says:
 "one agent + a few tools → opencode or PydanticAI, stop reading."
@@ -11,8 +11,10 @@ state shared between them, and the runs are seconds long so
 checkpointing is overhead, not value. The categorisation step is a
 single JSON call to Ollama — wrapping it in a typed-loop framework
 would add an abstraction layer without changing the LLM's behaviour.
-Pydantic is already in the import list, but used narrowly: validating
-the model's JSON output against the closed `CATEGORIES` enum.
+The model's JSON output is validated by a tiny hand-rolled check
+(`_validate_category` in `ledger/categorize.py`) against the closed
+`CATEGORIES` enum — PLAN §5.5 allowed either that or Pydantic, and a
+single set-membership test doesn't justify a validation dependency.
 
 **Why not PydanticAI.** PydanticAI's value is in typed multi-step
 agent loops with retry-on-validation-error. Our loop has exactly one

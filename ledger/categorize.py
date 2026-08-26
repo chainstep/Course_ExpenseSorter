@@ -14,16 +14,18 @@ import urllib.request
 from typing import Any
 
 from ledger.budget import is_over_budget, record_usage
-from ledger.config import CATEGORIES, CHAT_MODEL, OLLAMA_HOST
+from ledger.config import CACHE_SIMILARITY_THRESHOLD, CATEGORIES, CHAT_MODEL, OLLAMA_HOST
 from ledger.db import connect
 from ledger.embeddings import nearest_category, unpack_floats
 from ledger.sanitize import prompt_block, sanitize_merchant
 
 
-def _validate_category(value: Any) -> str:
+def _validate_category(value: Any) -> tuple[str, bool]:
+    """Return (category, valid). Out-of-enum values map to ("other", False)
+    so callers can count invalid model outputs before the fallback hides them."""
     if isinstance(value, str) and value in CATEGORIES:
-        return value
-    return "other"
+        return value, True
+    return "other", False
 
 
 def _fallback_classify(merchant_safe: str, amount: float) -> dict:
@@ -107,21 +109,25 @@ def _call_ollama(merchant_raw: str, amount: float, *, timeout: float = 30.0) -> 
     return parsed, prompt_tokens, eval_tokens
 
 
-def _categorize_one(merchant_raw: str, amount: float, stored_vec: list[float]) -> tuple[str, str, int, int]:
-    """Return (category, source, prompt_tokens, eval_tokens)."""
-    cached = nearest_category(stored_vec, threshold=0.92)
+def _categorize_one(merchant_raw: str, amount: float, stored_vec: list[float]) -> tuple[str, str, int, int, bool]:
+    """Return (category, source, prompt_tokens, eval_tokens, valid).
+
+    `valid` is False when the model produced an out-of-enum category and the
+    enum check coerced it to "other" — callers count this in invalid_outputs.
+    """
+    cached = nearest_category(stored_vec, threshold=CACHE_SIMILARITY_THRESHOLD)
     if cached:
-        return cached[0], "cache", 0, 0
+        return cached[0], "cache", 0, 0, True
 
     try:
         parsed, prompt_tokens, eval_tokens = _call_ollama(merchant_raw, amount)
-        category = _validate_category(parsed.get("category"))
-        return category, "model", prompt_tokens, eval_tokens
+        category, valid = _validate_category(parsed.get("category"))
+        return category, "model", prompt_tokens, eval_tokens, valid
     except (urllib.error.URLError, TimeoutError, ConnectionError, OSError, json.JSONDecodeError) as exc:
         print(f"[categorize] Ollama unreachable ({exc.__class__.__name__}); using rule fallback.", file=sys.stderr)
         parsed = _fallback_classify(sanitize_merchant(merchant_raw), amount)
-        category = _validate_category(parsed.get("category"))
-        return category, "rule", 0, 0
+        category, valid = _validate_category(parsed.get("category"))
+        return category, "rule", 0, 0, valid
 
 
 def categorize_pending(limit: int = 100) -> dict:
@@ -149,11 +155,12 @@ def categorize_pending(limit: int = 100) -> dict:
         merchant_raw = row["merchant"]
         amount = float(row["amount"])
         stored_vec = unpack_floats(bytes(row["vector"])) if row["vector"] else []
-        category, source, prompt_tokens, eval_tokens = _categorize_one(merchant_raw, amount, stored_vec)
+        category, source, prompt_tokens, eval_tokens, valid = _categorize_one(merchant_raw, amount, stored_vec)
         if source == "cache":
             from_cache += 1
-        if category not in CATEGORIES:
+        if not valid:
             invalid_outputs += 1
+        if category not in CATEGORIES:  # defensive; _validate_category already coerced
             category = "other"
         with connect() as conn:
             conn.execute(

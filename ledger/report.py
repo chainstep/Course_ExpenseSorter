@@ -7,7 +7,7 @@ import matplotlib
 matplotlib.use("Agg")  # noqa: E402  — non-interactive backend; required for headless
 import matplotlib.pyplot as plt
 
-from ledger.budget import budget_status
+from ledger.budget import budget_status, is_over_budget
 from ledger.config import REPORTS_DIR
 from ledger.db import connect
 
@@ -109,7 +109,9 @@ def _render_markdown(month: str, totals: dict[str, float], md_path: Path) -> Non
 
 
 def monthly_report(month: str) -> dict:
-    """Aggregate spend/income, write md + png, return paths only."""
+    """Aggregate spend/income, write md + png, return paths only. Budget-gated."""
+    if is_over_budget():
+        return {"error": "over_budget"}
     REPORTS_DIR.mkdir(parents=True, exist_ok=True)
     totals = _totals_by_category(month)
     md_path = REPORTS_DIR / f"{month}.md"
