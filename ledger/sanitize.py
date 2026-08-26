@@ -16,7 +16,7 @@ MAX_MERCHANT_LEN = 120
 INJECTION_PATTERNS: list[re.Pattern[str]] = [
     re.compile(r"ignore\s+(all\s+|any\s+|the\s+)?(previous|prior|above|prior\s+instructions?)", re.IGNORECASE),
     re.compile(r"\bdisregard\b", re.IGNORECASE),
-    re.compile(r"mark\s+(this|it|that|them)\s+as\b", re.IGNORECASE),
+    re.compile(r"mark\s+(this|it|that|them)\s+(?:transaction\s+)?as\b", re.IGNORECASE),
     re.compile(r"categor[si]ze.*?\sas\b", re.IGNORECASE),
     re.compile(r"you\s+are\s+(now\s+)?a\b", re.IGNORECASE),
     re.compile(r"\bsystem\s*:\s*", re.IGNORECASE),
