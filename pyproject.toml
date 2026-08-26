@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ledger"
+version = "0.1.0"
+description = "Local-only personal finance sorter"
+requires-python = ">=3.11"
+dependencies = [
+    "fastmcp>=2.0",
+    "pydantic>=2.0",
+    "matplotlib>=3.8",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["ledger*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
