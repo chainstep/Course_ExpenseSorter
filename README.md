@@ -36,6 +36,24 @@ read that for the "why".
                                               reports/<YYYY-MM>.png
 ```
 
+## Prerequisites — Ollama
+
+Categorisation and embeddings expect a local [Ollama](https://ollama.com)
+server with the `llama3.2:3b` model (used as both `CHAT_MODEL` and
+`EMBED_MODEL` in `ledger/config.py`):
+
+```bash
+ollama pull llama3.2:3b      # one-time download
+# ensure the server is running at http://localhost:11434, then verify:
+curl -s localhost:11434/api/embed -d '{"model":"llama3.2:3b","input":"hello"}' | head -c 120
+```
+
+If Ollama is unreachable the pipeline still runs end-to-end, but with
+deterministic stand-ins: hash-seeded pseudo-embeddings and a keyword
+rule classifier (rows are stamped `category_source='rule'` instead of
+`'model'`). See `docs/framework-decision.md` for why the fallback
+exists.
+
 ## Quick start
 
 ```bash

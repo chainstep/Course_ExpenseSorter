@@ -40,6 +40,17 @@ python3 -m venv .venv
 .venv/bin/python -m pytest -v          # 20 tests, all green
 ```
 
+Ollama must be running at `http://localhost:11434` with `llama3.2:3b`
+pulled (`ollama pull llama3.2:3b`). Verify with:
+
+```bash
+curl -s localhost:11434/api/embed -d '{"model":"llama3.2:3b","input":"hello"}' | head -c 120
+```
+
+Without it the deterministic fallbacks in `ledger/embeddings.py` /
+`ledger/categorize.py` take over (see `docs/framework-decision.md`) —
+the pipeline works, but no real model is involved.
+
 All commands below assume the venv interpreter, e.g.
 `.venv/bin/python ledger_cli.py ...`. The `.opencode/tools/import_csv.ts`
 tool invokes `.venv/bin/python` directly.
